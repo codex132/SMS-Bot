@@ -117,16 +117,17 @@ class NumberScraper:
         return list(found)
 
     def _process_site(self, url: str):
-        html = self._fetch_site(url)
-        if not html:
-            return
-        numbers = self._extract_numbers(html)
-        for num in numbers:
-            country = classify_number(num)
-            if country:
-                with self._lock:
-                    if num not in self._results[country]:
-                        self._results[country].append(num)
+    html = self._fetch_site(url)
+    if not html:
+        return
+    numbers = self._extract_numbers(html)
+    for num in numbers:
+        country = classify_number(num)
+        if country:
+            with self._lock:
+                if num not in self._results[country]:
+                    self._results[country].append(num)
+                    print(f"[SOURCE] {num} ← {url}")
 
     def scrape_all(self) -> dict[str, list[str]]:
         """Scrape all sites concurrently, return {country: [numbers]}."""
