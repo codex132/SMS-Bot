@@ -19,7 +19,6 @@ SITES = [
     "https://sms24.me/numbers",
     "https://www.receivesms.co/active-numbers/",
     "https://receive-sms.cc/",
-    "https://sms-receive.net/",
     "https://getfreesmsnumber.com/free-receive-sms-from-us",
     "https://getfreesmsnumber.com/free-receive-sms-from-uk",
     "https://getfreesmsnumber.com/free-receive-sms-from-ca",
