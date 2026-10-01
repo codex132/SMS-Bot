@@ -1,0 +1,7 @@
+aiogram==3.7.0
+requests==2.31.0
+beautifulsoup4==4.12.3
+phonenumbers==8.13.37
+aiohttp==3.9.5
+urllib3==2.2.1
+lxml==5.2.2
