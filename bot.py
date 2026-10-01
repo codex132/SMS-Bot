@@ -9,6 +9,9 @@ requires: pip install aiogram requests beautifulsoup4 phonenumbers aiohttp
 import asyncio
 import logging
 import os
+import datetime
+import db
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -17,22 +20,25 @@ from monitor import SMSMonitor
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")  # set via Railway env var
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable not set")
+
+ADMIN_ID = 7408592225  # ← replace with your numeric ID from @userinfobot
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 scraper = NumberScraper()
 monitor = SMSMonitor()
 
+db.init()
+
 # ── cache refreshed every 30 mins ──
-number_cache: dict[str, list[str]] = {}  # country_code → [numbers]
+number_cache: dict[str, list[str]] = {}
 cache_lock = asyncio.Lock()
 
 
 async def refresh_cache():
-    """Background task — keeps number pool fresh."""
     global number_cache
     while True:
         logging.info("Refreshing number pool...")
@@ -40,12 +46,16 @@ async def refresh_cache():
         async with cache_lock:
             number_cache = fresh
         logging.info(f"Pool updated: {sum(len(v) for v in fresh.values())} numbers across {len(fresh)} countries")
-        await asyncio.sleep(1800)  # refresh every 30 minutes
+        await asyncio.sleep(1800)
 
 
 # ── /start ──
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    u = message.from_user
+    db.log_user(u.id, u.full_name, u.username or "")
+    print(f"[USER] {datetime.datetime.now()} | ID: {u.id} | Name: {u.full_name} | @{u.username}")
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🇺🇸 USA", callback_data="country_US"),
          InlineKeyboardButton(text="🇬🇧 UK", callback_data="country_GB")],
@@ -79,10 +89,10 @@ async def cmd_start(message: types.Message):
         "Pick a country to see available numbers:",
         parse_mode="Markdown",
         reply_markup=kb
-         )
+    )
 
 
-# ── /numbers — alias ──
+# ── /numbers ──
 @dp.message(Command("numbers"))
 async def cmd_numbers(message: types.Message):
     await cmd_start(message)
@@ -99,6 +109,67 @@ async def cmd_status(message: types.Message):
         f"Numbers available: `{total}`\n"
         f"Countries covered: `{countries}`\n"
         f"Refresh cycle: every 30 minutes",
+        parse_mode="Markdown"
+    )
+
+
+# ── /stats ──
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Admin only.")
+        return
+    total = db.count_users()
+    await message.answer(f"👥 *Total users:* `{total}`", parse_mode="Markdown")
+
+
+# ── /listusers ──
+@dp.message(Command("listusers"))
+async def cmd_listusers(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Admin only.")
+        return
+    users = db.get_all_users()
+    if not users:
+        await message.answer("No users yet.")
+        return
+    chunks = []
+    lines = []
+    for uid, name, uname, first, last, uses in users:
+        uname_display = f"@{uname}" if uname else "no username"
+        lines.append(f"• {name} ({uname_display})\n  ID: `{uid}` | Uses: {uses} | Joined: {first[:10]}")
+        if len(lines) % 20 == 0:
+            chunks.append("\n\n".join(lines))
+            lines = []
+    if lines:
+        chunks.append("\n\n".join(lines))
+    for chunk in chunks:
+        await message.answer(chunk, parse_mode="Markdown")
+
+
+# ── /broadcast ──
+@dp.message(Command("broadcast"))
+async def cmd_broadcast(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Admin only.")
+        return
+    text = message.text.replace("/broadcast", "", 1).strip()
+    if not text:
+        await message.answer("Usage: `/broadcast Your message here`", parse_mode="Markdown")
+        return
+    ids = db.get_all_ids()
+    success, failed = 0, 0
+    for uid in ids:
+        try:
+            await bot.send_message(uid, f"📢 *Broadcast*\n\n{text}", parse_mode="Markdown")
+            success += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+    await message.answer(
+        f"✅ Broadcast done\n\n"
+        f"Sent: `{success}`\n"
+        f"Failed: `{failed}` (blocked/deleted)",
         parse_mode="Markdown"
     )
 
@@ -123,7 +194,7 @@ async def pick_country(callback: types.CallbackQuery):
         [InlineKeyboardButton(
             text=f"📲 {n}",
             callback_data=f"use_{n}"
-        )] for n in nums[:10]  # cap display at 10
+        )] for n in nums[:10]
     ])
     await callback.message.answer(
         f"📋 *Available numbers — {code}*\nTap a number to monitor for incoming SMS:",
@@ -133,27 +204,22 @@ async def pick_country(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ── number selected — start monitoring ──
+# ── number selected ──
 @dp.callback_query(lambda c: c.data.startswith("use_"))
 async def use_number(callback: types.CallbackQuery):
     number = callback.data[4:]
-    user_id = callback.from_user.id
-
     await callback.message.answer(
         f"🔍 Monitoring `{number}` for incoming SMS...\n"
         f"Timeout: 10 minutes. I'll notify you when an OTP arrives.",
         parse_mode="Markdown"
     )
     await callback.answer()
-
-    # spawn monitor task
     asyncio.create_task(
-        watch_number(user_id, number, callback.message.chat.id)
+        watch_number(number, callback.message.chat.id)
     )
 
 
-async def watch_number(user_id: int, number: str, chat_id: int):
-    """Poll for new SMS on the given number, deliver to user."""
+async def watch_number(number: str, chat_id: int):
     result = await asyncio.to_thread(monitor.wait_for_sms, number, timeout=600)
     if result:
         await bot.send_message(
