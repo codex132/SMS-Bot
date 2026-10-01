@@ -68,11 +68,11 @@ POLL_TARGETS = [
         "parser": _parse_receivesmss,
     },
     {
-        "url": "https://www.receivesms.co/us-phone-number/{clean}/",
+        "url": "https://www.receivesms.co/uk-phone-number/{clean}/",
         "parser": _parse_receivesmsco,
     },
     {
-        "url": "https://www.receivesms.co/uk-phone-number/{clean}/",
+        "url": "https://www.receivesms.co/us-phone-number/{clean}/",
         "parser": _parse_receivesmsco,
     },
     {
@@ -84,15 +84,15 @@ POLL_TARGETS = [
         "parser": _parse_generic,
     },
     {
-        "url": "https://sms-receive.net/number/{clean}",
-        "parser": _parse_generic,
-    },
-    {
         "url": "https://quackr.io/temporary-numbers/{clean}",
         "parser": _parse_generic,
     },
     {
         "url": "https://temp-number.org/numbers/{clean}",
+        "parser": _parse_generic,
+    },
+    {
+        "url": "https://onlinesim.io/virtual-phone-numbers/{clean}",
         "parser": _parse_generic,
     },
 ]
