@@ -55,6 +55,22 @@ async def cmd_start(message: types.Message):
          InlineKeyboardButton(text="🇫🇷 France", callback_data="country_FR")],
         [InlineKeyboardButton(text="🇸🇪 Sweden", callback_data="country_SE"),
          InlineKeyboardButton(text="🇵🇱 Poland", callback_data="country_PL")],
+        [InlineKeyboardButton(text="🇳🇬 Nigeria", callback_data="country_NG"),
+         InlineKeyboardButton(text="🇮🇳 India", callback_data="country_IN")],
+        [InlineKeyboardButton(text="🇧🇷 Brazil", callback_data="country_BR"),
+         InlineKeyboardButton(text="🇲🇽 Mexico", callback_data="country_MX")],
+        [InlineKeyboardButton(text="🇷🇺 Russia", callback_data="country_RU"),
+         InlineKeyboardButton(text="🇺🇦 Ukraine", callback_data="country_UA")],
+        [InlineKeyboardButton(text="🇳🇱 Netherlands", callback_data="country_NL"),
+         InlineKeyboardButton(text="🇧🇪 Belgium", callback_data="country_BE")],
+        [InlineKeyboardButton(text="🇮🇩 Indonesia", callback_data="country_ID"),
+         InlineKeyboardButton(text="🇵🇭 Philippines", callback_data="country_PH")],
+        [InlineKeyboardButton(text="🇻🇳 Vietnam", callback_data="country_VN"),
+         InlineKeyboardButton(text="🇹🇭 Thailand", callback_data="country_TH")],
+        [InlineKeyboardButton(text="🇰🇪 Kenya", callback_data="country_KE"),
+         InlineKeyboardButton(text="🇬🇭 Ghana", callback_data="country_GH")],
+        [InlineKeyboardButton(text="🇿🇦 South Africa", callback_data="country_ZA"),
+         InlineKeyboardButton(text="🇪🇹 Ethiopia", callback_data="country_ET")],
         [InlineKeyboardButton(text="🔄 Refresh Pool", callback_data="refresh")],
     ])
     await message.answer(
@@ -63,7 +79,7 @@ async def cmd_start(message: types.Message):
         "Pick a country to see available numbers:",
         parse_mode="Markdown",
         reply_markup=kb
-    )
+         )
 
 
 # ── /numbers — alias ──
