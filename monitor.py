@@ -15,12 +15,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-# per-site poll strategies — add more as needed
-# each entry: (url_template, parser_fn)
-# url_template uses {number} placeholder (digits only, no +)
-
 def _strip(n: str) -> str:
-    """Strip +, spaces, dashes from number."""
     return re.sub(r"[^\d]", "", n)
 
 
@@ -30,7 +25,7 @@ def _parse_receivesmss(html: str) -> list[dict]:
     messages = []
     soup = BeautifulSoup(html, "html.parser")
     rows = soup.select("table tr")
-    for row in rows[1:]:  # skip header
+    for row in rows[1:]:
         cols = row.find_all("td")
         if len(cols) >= 3:
             messages.append({
@@ -57,11 +52,9 @@ def _parse_receivesmsco(html: str) -> list[dict]:
 
 
 def _parse_generic(html: str) -> list[dict]:
-    """Fallback — grab any text that looks like an OTP."""
     messages = []
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(separator="\n")
-    # look for lines with OTP-shaped content (4-8 digit codes)
     for line in text.splitlines():
         line = line.strip()
         if re.search(r'\b\d{4,8}\b', line) and len(line) < 300:
@@ -79,7 +72,11 @@ POLL_TARGETS = [
         "parser": _parse_receivesmsco,
     },
     {
-        "url": "https://sms-receive.net/number/{clean}",
+        "url": "https://www.receivesms.co/uk-phone-number/{clean}/",
+        "parser": _parse_receivesmsco,
+    },
+    {
+        "url": "https://sms24.me/en/numbers/{clean}/",
         "parser": _parse_generic,
     },
     {
@@ -87,11 +84,15 @@ POLL_TARGETS = [
         "parser": _parse_generic,
     },
     {
-        "url": "https://hs3x.com/number/{clean}",
+        "url": "https://sms-receive.net/number/{clean}",
         "parser": _parse_generic,
     },
     {
-        "url": "https://online-sms.org/number/{clean}",
+        "url": "https://quackr.io/temporary-numbers/{clean}",
+        "parser": _parse_generic,
+    },
+    {
+        "url": "https://temp-number.org/numbers/{clean}",
         "parser": _parse_generic,
     },
 ]
@@ -111,15 +112,14 @@ class SMSMonitor:
                 logging.debug(f"poll failed {url}: {e}")
         return found
 
-    def wait_for_sms(self, number: str, timeout: int = 600, interval: int = 12) -> dict | None:
+    def wait_for_sms(self, number: str, timeout: int = 600, interval: int = 6) -> dict | None:
         """
         Poll for new SMS on number.
         Returns first new message dict or None on timeout.
         timeout: seconds to wait (default 10 min)
-        interval: poll every N seconds
+        interval: poll every 6 seconds
         """
         deadline = time.time() + timeout
-        # snapshot existing messages so we only return NEW ones
         baseline = {m["text"] for m in self._poll_once(number)}
         logging.info(f"Monitoring {number} | baseline: {len(baseline)} existing messages")
 
