@@ -41,14 +41,13 @@ SITES = [
     "https://online-sms.org/",
     "https://quackr.io/temporary-numbers",
     "https://temp-number.org/",
-    "https://receive-smsonline.net/",
+    "https://receivesms.it.com/",
 ]
 
-# map country code → list of known number prefixes to help classify
 COUNTRY_PREFIXES = {
     "US": "+1",
     "GB": "+44",
-    "CA": "+1",    # CA and US share +1 — differentiated by area code below
+    "CA": "+1",
     "AU": "+61",
     "DE": "+49",
     "FR": "+33",
@@ -64,7 +63,6 @@ COUNTRY_PREFIXES = {
     "MX": "+52",
 }
 
-# CA area codes to separate from US +1
 CA_AREA_CODES = {
     "204","226","236","249","250","289","306","343","365","387","403","416",
     "418","431","437","438","450","506","514","519","548","579","581","587",
@@ -74,7 +72,6 @@ CA_AREA_CODES = {
 
 
 def classify_number(e164: str) -> str | None:
-    """Return ISO country code or None if unrecognised."""
     try:
         n = phonenumbers.parse(e164)
         region = phonenumbers.region_code_for_number(n)
@@ -87,6 +84,7 @@ class NumberScraper:
     def __init__(self):
         self._lock = threading.Lock()
         self._results: dict[str, list[str]] = defaultdict(list)
+        self._sources: dict[str, str] = {}  # number → source url
 
     def _fetch_site(self, url: str) -> str:
         try:
@@ -98,12 +96,10 @@ class NumberScraper:
             return ""
 
     def _extract_numbers(self, html: str) -> list[str]:
-        """Use phonenumbers matcher across all country contexts."""
         found = set()
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(separator=" ")
 
-        # scan against every country context for maximum extraction
         for region in phonenumbers.SUPPORTED_REGIONS:
             try:
                 matcher = phonenumbers.PhoneNumberMatcher(text, region)
@@ -117,21 +113,22 @@ class NumberScraper:
         return list(found)
 
     def _process_site(self, url: str):
-    html = self._fetch_site(url)
-    if not html:
-        return
-    numbers = self._extract_numbers(html)
-    for num in numbers:
-        country = classify_number(num)
-        if country:
-            with self._lock:
-                if num not in self._results[country]:
-                    self._results[country].append(num)
-                    print(f"[SOURCE] {num} ← {url}")
+        html = self._fetch_site(url)
+        if not html:
+            return
+        numbers = self._extract_numbers(html)
+        for num in numbers:
+            country = classify_number(num)
+            if country:
+                with self._lock:
+                    if num not in self._results[country]:
+                        self._results[country].append(num)
+                        self._sources[num] = url
+                        print(f"[SOURCE] {num} ← {url}")
 
     def scrape_all(self) -> dict[str, list[str]]:
-        """Scrape all sites concurrently, return {country: [numbers]}."""
         self._results = defaultdict(list)
+        self._sources = {}
         threads = []
         for site in SITES:
             t = threading.Thread(target=self._process_site, args=(site,), daemon=True)
@@ -140,5 +137,4 @@ class NumberScraper:
         for t in threads:
             t.join(timeout=15)
 
-        # deduplicate
         return {k: list(set(v)) for k, v in self._results.items()}
