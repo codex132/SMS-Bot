@@ -1,8 +1,7 @@
 """
 language: Python 3.10+
 file: monitor.py
-target: poll verified open SMS sites for incoming messages on a specific number
-Each site confirmed: no login, messages publicly visible
+target: poll verified open SMS sites — no login required
 """
 
 import requests
@@ -18,147 +17,150 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 
 def _strip(n: str) -> str:
-    """Strip + and non-digits"""
     return re.sub(r"[^\d]", "", n)
 
 
-# ── PARSERS — one per site structure ──
-
 def _parse_receivesmss(html: str) -> list[dict]:
     """
-    receive-smss.com structure:
-    Message in <div> with class pattern, Sender in separate element
-    Confirmed open — no login needed
+    receive-smss.com individual number page.
+    OTPs are in <strong> tags. Sender is in separate link.
+    Confirmed open — no login for any number.
     """
     messages = []
     soup = BeautifulSoup(html, "html.parser")
-    # messages are in table rows or specific divs
-    # structure: Message | Sender | Time columns
-    rows = soup.select("table tr")
-    for row in rows[1:]:
-        cols = row.find_all("td")
-        if len(cols) >= 3:
-            msg_text = cols[0].get_text(strip=True)
-            sender = cols[1].get_text(strip=True) if len(cols) > 1 else "unknown"
-            if msg_text and len(msg_text) < 500:
-                messages.append({
-                    "sender": sender,
-                    "text": msg_text,
-                    "time": cols[2].get_text(strip=True) if len(cols) > 2 else "",
-                })
-    # fallback: grab any bold OTP codes
+
+    # each message block — look for elements containing bold OTP codes
+    # structure: message text with <strong>CODE</strong>, sender as link
+    seen = set()
+
+    # try to find message containers
+    for container in soup.select(".message, .sms-message, .msg, article, .single-message"):
+        text = container.get_text(separator=" ", strip=True)
+        if text and len(text) < 500 and text not in seen:
+            sender_tag = container.find("a")
+            sender = sender_tag.get_text(strip=True) if sender_tag else "unknown"
+            messages.append({"sender": sender, "text": text, "time": ""})
+            seen.add(text)
+
+    # fallback: grab full paragraph text containing bold OTP codes
     if not messages:
         for bold in soup.find_all("strong"):
-            text = bold.get_text(strip=True)
-            if re.search(r'\b\d{4,8}\b', text):
-                parent = bold.find_parent()
-                full_text = parent.get_text(strip=True) if parent else text
-                messages.append({"sender": "unknown", "text": full_text, "time": ""})
+            code = bold.get_text(strip=True)
+            if re.search(r'\b\d{4,8}\b', code):
+                parent = bold.find_parent(["p", "div", "td", "li"])
+                full_text = parent.get_text(separator=" ", strip=True) if parent else code
+                if full_text not in seen and len(full_text) < 500:
+                    messages.append({"sender": "unknown", "text": full_text, "time": ""})
+                    seen.add(full_text)
+
+    # second fallback: any text line with OTP pattern
+    if not messages:
+        text_content = soup.get_text(separator="\n")
+        for line in text_content.splitlines():
+            line = line.strip()
+            if re.search(r'\b\d{4,8}\b', line) and 10 < len(line) < 300:
+                if line not in seen:
+                    messages.append({"sender": "unknown", "text": line, "time": ""})
+                    seen.add(line)
+
     return messages
 
 
 def _parse_receivesmsco(html: str) -> list[dict]:
-    """
-    receivesms.co structure:
-    Messages in .sms-list-item or table rows
-    Confirmed open — no login needed
-    """
+    """receivesms.co — table structure, confirmed open"""
     messages = []
     soup = BeautifulSoup(html, "html.parser")
-    # try table rows first
     rows = soup.select("table tr, .receivesms-table tr")
     for row in rows[1:]:
         cols = row.find_all("td")
         if len(cols) >= 2:
-            messages.append({
-                "sender": cols[0].get_text(strip=True),
-                "text": cols[-1].get_text(strip=True),
-                "time": cols[1].get_text(strip=True) if len(cols) > 2 else "",
-            })
-    return messages
-
-
-def _parse_quackr(html: str) -> list[dict]:
-    """
-    quackr.io structure:
-    Messages in .message-item or similar
-    Confirmed open — no login needed
-    """
-    messages = []
-    soup = BeautifulSoup(html, "html.parser")
-    # quackr uses specific message containers
-    items = soup.select(".message-item, .sms-item, .inbox-item, article, .message")
-    for item in items:
-        text = item.get_text(separator=" ", strip=True)
-        if text and re.search(r'\b\d{4,8}\b', text) and len(text) < 500:
-            messages.append({"sender": "unknown", "text": text, "time": ""})
-    if not messages:
-        # fallback generic
-        for line in soup.get_text(separator="\n").splitlines():
-            line = line.strip()
-            if re.search(r'\b\d{4,8}\b', line) and 5 < len(line) < 300:
-                messages.append({"sender": "unknown", "text": line, "time": ""})
+            text = cols[-1].get_text(strip=True)
+            if text and len(text) < 500:
+                messages.append({
+                    "sender": cols[0].get_text(strip=True),
+                    "text": text,
+                    "time": cols[1].get_text(strip=True) if len(cols) > 2 else "",
+                })
     return messages
 
 
 def _parse_generic(html: str) -> list[dict]:
-    """Generic fallback — grabs OTP-shaped content"""
+    """Generic fallback — OTP pattern scan"""
     messages = []
+    seen = set()
     soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text(separator="\n")
-    for line in text.splitlines():
-        line = line.strip()
-        if re.search(r'\b\d{4,8}\b', line) and 5 < len(line) < 300:
-            messages.append({"sender": "unknown", "text": line, "time": ""})
+
+    # try bold tags first
+    for bold in soup.find_all("strong"):
+        code = bold.get_text(strip=True)
+        if re.search(r'\b\d{4,8}\b', code):
+            parent = bold.find_parent(["p", "div", "td", "li"])
+            full_text = parent.get_text(separator=" ", strip=True) if parent else code
+            if full_text not in seen and len(full_text) < 500:
+                messages.append({"sender": "unknown", "text": full_text, "time": ""})
+                seen.add(full_text)
+
+    # fallback line scan
+    if not messages:
+        for line in soup.get_text(separator="\n").splitlines():
+            line = line.strip()
+            if re.search(r'\b\d{4,8}\b', line) and 10 < len(line) < 300:
+                if line not in seen:
+                    messages.append({"sender": "unknown", "text": line, "time": ""})
+                    seen.add(line)
     return messages
 
 
-# ── POLL TARGETS — only verified open sites ──
-# URL format: {clean} = digits only, no +
+# ── VERIFIED OPEN POLL TARGETS — no login required ──
 POLL_TARGETS = [
     {
-        # ✅ VERIFIED OPEN — URL: /sms/{digits}/
+        # ✅ OPEN — confirmed Facebook/WhatsApp OTPs land here
         "url": "https://receive-smss.com/sms/{clean}/",
         "parser": _parse_receivesmss,
     },
     {
-        # ✅ VERIFIED OPEN — UK numbers endpoint
+        # ✅ OPEN — UK numbers endpoint
         "url": "https://www.receivesms.co/uk-phone-number/{clean}/",
         "parser": _parse_receivesmsco,
     },
     {
-        # ✅ VERIFIED OPEN — US numbers endpoint
+        # ✅ OPEN — US numbers endpoint
         "url": "https://www.receivesms.co/us-phone-number/{clean}/",
         "parser": _parse_receivesmsco,
     },
     {
-        # ✅ VERIFIED OPEN — quackr
-        "url": "https://quackr.io/temporary-numbers/{clean}",
-        "parser": _parse_quackr,
+        # ✅ OPEN — Germany endpoint
+        "url": "https://www.receivesms.co/germany-phone-number/{clean}/",
+        "parser": _parse_receivesmsco,
     },
     {
-        # ✅ VERIFIED OPEN — temp-number.org
+        # ✅ OPEN — quackr
+        "url": "https://quackr.io/temporary-numbers/{clean}",
+        "parser": _parse_generic,
+    },
+    {
+        # ✅ OPEN — temp-number.org
         "url": "https://temp-number.org/numbers/{clean}",
         "parser": _parse_generic,
     },
     {
-        # ✅ VERIFIED OPEN — sms24.me
+        # ✅ OPEN — sms24.me
         "url": "https://sms24.me/en/numbers/{clean}/",
         "parser": _parse_generic,
     },
     {
-        # ✅ VERIFIED OPEN — receive-sms.cc
-        "url": "https://receive-sms.cc/{clean}/",
-        "parser": _parse_generic,
-    },
-    {
-        # ✅ VERIFIED OPEN — receivesms.it.com
+        # ✅ OPEN — receivesms.it.com
         "url": "https://receivesms.it.com/numbers/{clean}/",
         "parser": _parse_generic,
     },
     {
-        # ✅ VERIFIED OPEN — freephonenum.com
-        "url": "https://freephonenum.com/receive-sms/{clean}/",
+        # ✅ OPEN — receivesms.me (fast, confirmed working)
+        "url": "https://receivesms.me/number/{clean}",
+        "parser": _parse_generic,
+    },
+    {
+        # ✅ OPEN — receive-sms.cc
+        "url": "https://receive-sms.cc/{clean}/",
         "parser": _parse_generic,
     },
 ]
@@ -177,32 +179,27 @@ class SMSMonitor:
                     found.extend(msgs)
             except Exception as e:
                 logging.debug(f"poll failed {url}: {e}")
+
         # deduplicate by text
         seen = set()
         unique = []
         for m in found:
-            if m["text"] not in seen and m["text"]:
+            if m["text"] and m["text"] not in seen:
                 seen.add(m["text"])
                 unique.append(m)
         return unique
 
     def wait_for_sms(self, number: str, timeout: int = 600, interval: int = 6) -> dict | None:
-        """
-        Poll all verified open sites for new SMS on number.
-        Returns first new message or None on timeout.
-        timeout: 600s (10 min)
-        interval: poll every 6 seconds
-        """
         deadline = time.time() + timeout
         baseline = {m["text"] for m in self._poll_once(number)}
-        logging.info(f"Monitoring {number} | baseline: {len(baseline)} existing messages")
+        logging.info(f"Monitoring {number} | baseline: {len(baseline)} messages")
 
         while time.time() < deadline:
             time.sleep(interval)
             current = self._poll_once(number)
             for msg in current:
                 if msg["text"] not in baseline:
-                    logging.info(f"✅ New SMS on {number}: {msg['text'][:50]}")
+                    logging.info(f"✅ New SMS on {number}: {msg['text'][:60]}")
                     return msg
-        logging.info(f"⏱ Timeout monitoring {number}")
+        logging.info(f"⏱ Timeout on {number}")
         return None
